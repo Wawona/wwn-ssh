@@ -527,8 +527,13 @@ PYTHON_EOF
 #include <errno.h>
 #include <dlfcn.h>
 
-/* Forward declaration of OpenSSH's real main function */
-extern int main(int argc, char **argv);
+/*
+ * ssh.o's main() is renamed to wwn_openssh_ssh_real_main via `ld -r -alias`
+ * before archiving, so that ssh.o / ssh-keygen.o / scp.o can coexist in
+ * libssh-inprocess.a without colliding with each other (or the app's main)
+ * when the archive is -force_load'ed.
+ */
+extern int wwn_openssh_ssh_real_main(int argc, char **argv);
 
 /* 
  * iOS fallback passwd structure
@@ -668,8 +673,8 @@ int ssh_main(int argc, char **argv) {
     fprintf(stderr, "[ssh_main] About to call SSH main()...\n");
     fflush(stderr);
 
-    /* Call the real SSH main */
-    int result = main(argc, argv);
+    /* Call the real SSH main (renamed from main via ld -r -alias) */
+    int result = wwn_openssh_ssh_real_main(argc, argv);
     
     fprintf(stderr, "[ssh_main] SSH exited with code %d\n", result);
     fflush(stderr);
@@ -828,8 +833,8 @@ SSH_MAIN_EOF
 #include <pwd.h>
 #include <unistd.h>
 
-/* Forward declaration of ssh-keygen's real main */
-extern int main(int argc, char **argv);
+/* ssh-keygen.o's main, renamed via ld -r -alias before archiving */
+extern int wwn_openssh_keygen_real_main(int argc, char **argv);
 
 int ssh_keygen_main(int argc, char **argv) {
     /* Rewrite argv[0] to "ssh-keygen" so argument parsing works */
@@ -839,21 +844,61 @@ int ssh_keygen_main(int argc, char **argv) {
     new_argv[0] = fixed_argv0;
     for (int i = 1; i < argc; i++) new_argv[i] = argv[i];
     new_argv[argc] = NULL;
-    int rc = main(argc, new_argv);
+    int rc = wwn_openssh_keygen_real_main(argc, new_argv);
     free(new_argv);
     return rc;
 }
 SSH_KEYGEN_MAIN_EOF
     $CC $CFLAGS -c ssh_keygen_main.c -o ssh_keygen_main.o || \
       echo "Warning: ssh_keygen_main.c compile failed"
+
+    # ========================================
+    # STEP 2c: Create scp_main wrapper
+    # ========================================
+    echo "Step 2c: Creating scp_main.c wrapper..."
+    cat > scp_main.c << 'SCP_MAIN_EOF'
+/*
+ * scp_main.c - Entry point wrapper for iOS in-process scp.
+ * Allows scp to be called in-process by wawona-dispatch without
+ * fork/exec (App Store compliant).
+ */
+#include <stdlib.h>
+
+/* scp.o's main, renamed via ld -r -alias before archiving */
+extern int wwn_openssh_scp_real_main(int argc, char **argv);
+
+int scp_main(int argc, char **argv) {
+    char *fixed_argv0 = "scp";
+    char **new_argv = malloc((argc + 1) * sizeof(char *));
+    if (!new_argv) return 1;
+    new_argv[0] = fixed_argv0;
+    for (int i = 1; i < argc; i++) new_argv[i] = argv[i];
+    new_argv[argc] = NULL;
+    int rc = wwn_openssh_scp_real_main(argc, new_argv);
+    free(new_argv);
+    return rc;
+}
+SCP_MAIN_EOF
+    $CC $CFLAGS -c scp_main.c -o scp_main.o || \
+      echo "Warning: scp_main.c compile failed"
     
+    # ========================================
+    # STEP 2e: Rename ssh.o's main() so it can coexist with ssh-keygen.o /
+    # scp.o / the app's main in one force_load'ed archive.
+    # `ld -r -alias _main <new> -unexported_symbol _main` keeps _main local
+    # and exports the alias; the wrappers call the wwn_*_real_main aliases.
+    # ========================================
+    echo "Step 2e: Renaming ssh.o main() -> wwn_openssh_ssh_real_main..."
+    ld -r -arch arm64 ssh.o -o ssh_renamed.o \
+      -alias _main _wwn_openssh_ssh_real_main -unexported_symbol _main
+
     # ========================================
     # STEP 3: Create ssh.dylib for iOS dlopen
     # ========================================
     echo "Step 3: Creating ssh.dylib..."
     
     # Collect SSH client object files
-    SSH_OBJS="ssh.o readconf.o clientloop.o sshtty.o sshconnect.o sshconnect2.o mux.o ssh_main.o"
+    SSH_OBJS="ssh_renamed.o readconf.o clientloop.o sshtty.o sshconnect.o sshconnect2.o mux.o ssh_main.o"
     
     # Add optional object files if they exist
     [ -f ssh-sk-client.o ] && SSH_OBJS="$SSH_OBJS ssh-sk-client.o"
@@ -889,7 +934,6 @@ SSH_KEYGEN_MAIN_EOF
         -lresolv \
         -install_name @rpath/ssh.dylib \
         -Wl,-exported_symbol,_ssh_main \
-        -Wl,-exported_symbol,_main \
         && echo "✓ ssh.dylib created successfully" \
         || {
           echo "Primary dylib creation failed, trying with -undefined dynamic_lookup..."
@@ -964,20 +1008,48 @@ SSH_KEYGEN_MAIN_EOF
     (cd _ssh_objs && ar x ../libssh.a 2>/dev/null) || true
     (cd _compat_objs && ar x ../openbsd-compat/libopenbsd-compat.a 2>/dev/null) || true
 
-    # SSH client objects (ssh command)
-    SSH_CLIENT_OBJS="ssh.o readconf.o clientloop.o sshtty.o sshconnect.o sshconnect2.o mux.o ssh_main.o"
+    # clientloop.o carries the ssh client's cleanup_exit; libssh.a's generic
+    # cleanup.o defines it too, and with -force_load both members get loaded,
+    # so drop the generic one to avoid a duplicate-symbol link failure.
+    rm -f _ssh_objs/cleanup.o
+
+    # SSH client objects (ssh command). ssh_renamed.o = ssh.o with main()
+    # aliased to wwn_openssh_ssh_real_main (see STEP 2e).
+    SSH_CLIENT_OBJS="ssh_renamed.o readconf.o clientloop.o sshtty.o sshconnect.o sshconnect2.o mux.o ssh_main.o"
     [ -f ssh-sk-client.o ] && SSH_CLIENT_OBJS="$SSH_CLIENT_OBJS ssh-sk-client.o"
 
-    # ssh-keygen objects (if built)
+    # ssh-keygen objects (if built). Rename its main() and pull in sshsig.o
+    # (ssh-keygen's signature support lives outside libssh.a).
     KEYGEN_OBJS=""
     if [ -f ssh-keygen.o ] && [ -f ssh_keygen_main.o ]; then
-      KEYGEN_OBJS="ssh-keygen.o ssh_keygen_main.o"
+      ld -r -arch arm64 ssh-keygen.o -o ssh-keygen_renamed.o \
+        -alias _main _wwn_openssh_keygen_real_main -unexported_symbol _main \
+        && KEYGEN_OBJS="ssh-keygen_renamed.o ssh_keygen_main.o" \
+        || echo "Warning: ssh-keygen main rename failed; excluding from archive"
+      if [ -n "$KEYGEN_OBJS" ] && [ -f sshsig.o ]; then
+        KEYGEN_OBJS="$KEYGEN_OBJS sshsig.o"
+      fi
     fi
 
-    # scp objects (if built)
+    # scp objects (if built). Rename its main() (and hide its cleanup_exit,
+    # clientloop.o already provides one) and pull in the sftp client objects
+    # scp's SFTP mode needs. progressmeter.o is already inside libssh.a, and
+    # sftp-client.o supersedes libssh.a's compat sftp-realpath.o.
     SCP_OBJS=""
-    if [ -f scp.o ]; then
-      SCP_OBJS="scp.o"
+    if [ -f scp.o ] && [ -f scp_main.o ]; then
+      ld -r -arch arm64 scp.o -o scp_renamed.o \
+        -alias _main _wwn_openssh_scp_real_main \
+        -unexported_symbol _main -unexported_symbol _cleanup_exit \
+        && SCP_OBJS="scp_renamed.o scp_main.o" \
+        || echo "Warning: scp main rename failed; excluding from archive"
+      if [ -n "$SCP_OBJS" ]; then
+        for o in sftp-common.o sftp-client.o sftp-glob.o; do
+          [ -f "$o" ] && SCP_OBJS="$SCP_OBJS $o"
+        done
+        if [ -f sftp-client.o ]; then
+          rm -f _ssh_objs/sftp-realpath.o
+        fi
+      fi
     fi
 
     # Collect all extracted objects
