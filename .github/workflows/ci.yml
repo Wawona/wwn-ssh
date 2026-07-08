@@ -1,0 +1,54 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  eval:
+    name: flake eval (instantiation)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: fragment evaluates
+        run: nix eval .#registryFragment --apply builtins.attrNames
+      - name: backends lib evaluates
+        run: nix eval .#lib.backends --apply builtins.attrNames
+      - name: recipes instantiate (no build)
+        run: |
+          nix eval --raw .#packages.aarch64-darwin.openssh-ios.drvPath
+          nix eval --raw .#packages.aarch64-darwin.libssh2-ios.drvPath
+          nix eval --raw .#packages.aarch64-darwin.sshpass-ios.drvPath
+          nix eval --raw .#packages.aarch64-darwin.openssh-android.drvPath
+          nix eval --raw .#packages.aarch64-darwin.libssh2-android.drvPath
+          nix eval --raw .#packages.aarch64-darwin.sshpass-android.drvPath
+          nix eval --raw .#packages.aarch64-darwin.openssh-macos.drvPath
+          nix eval --raw .#packages.aarch64-darwin.sshpass-macos.drvPath
+
+  build-apple:
+    name: build ssh stack (Apple)
+    runs-on: macos-15
+    needs: eval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            sandbox = relaxed
+            allow-import-from-derivation = true
+      - run: nix build .#packages.aarch64-darwin.openssh-ios .#packages.aarch64-darwin.libssh2-ios .#packages.aarch64-darwin.openssh-macos -L
+
+  build-android:
+    name: build ssh stack (Android)
+    runs-on: macos-15
+    needs: eval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            sandbox = relaxed
+            allow-import-from-derivation = true
+      - run: nix build .#packages.aarch64-darwin.openssh-android .#packages.aarch64-darwin.libssh2-android .#packages.aarch64-darwin.sshpass-android -L
