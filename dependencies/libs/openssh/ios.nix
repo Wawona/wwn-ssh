@@ -1028,9 +1028,12 @@ SCP_MAIN_EOF
     # so drop the generic one to avoid a duplicate-symbol link failure.
     rm -f _ssh_objs/cleanup.o
 
-    # chachapoly_crypt/get_length also live in libssh2 (-lssh2); drop only those
-    # translation units and keep chachapoly_new/free for openssh client code.
-    rm -f _ssh_objs/cipher-chachapoly-libcrypto.o
+    # Keep cipher-chachapoly-libcrypto.o: WITH_OPENSSL builds leave the portable
+    # cipher-chachapoly.o empty and put chachapoly_new/free (and crypt/get_length)
+    # in the libcrypto TU. Dropping it leaves undefined _chachapoly_new/free at
+    # app link; libssh2 only exports crypt/get_length/init. xcode-prebuild's
+    # privatize_lib (nmedit) hides these globals so they do not collide with
+    # libssh2 at the final iOS link.
 
     # SSH client objects (ssh command). ssh_renamed.o = ssh.o with main()
     # aliased to wwn_openssh_ssh_real_main (see STEP 2e).
