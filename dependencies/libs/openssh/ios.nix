@@ -740,15 +740,16 @@ SSH_MAIN_EOF
     # CRITICAL: Use -fPIC for position-independent code
     # This is required for building a dylib that can be dlopened
     # ========================================
-    export CFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -fPIC -I${zlib}/include -I${openssl}/include"
-    export CXXFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -fPIC -I${zlib}/include -I${openssl}/include"
+    # Copy before configure so -include works from the build tree.
+    cp ${./patches/wwn-apple-progname.h} "$PWD/wwn-apple-progname.h"
+
+    # Darwin C ABI: __progname → Mach-O ___progname (private; altool code 11).
+    # Force portable OpenSSH progname + rename via -include (see header).
+    export ac_cv_libc_defines___progname=no
+    export CFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -fPIC -I${zlib}/include -I${openssl}/include -include $PWD/wwn-apple-progname.h"
+    export CXXFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -fPIC -I${zlib}/include -I${openssl}/include -include $PWD/wwn-apple-progname.h"
     export LDFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -L${zlib}/lib -L${openssl}/lib"
     export PKG_CONFIG_PATH="${zlib}/lib/pkgconfig:${openssl}/lib/pkgconfig:$PKG_CONFIG_PATH"
-
-    # Darwin libc exposes __progname as the private Mach-O ___progname. App Store
-    # Connect rejects IPAs that reference that symbol (altool code 11). Force the
-    # portable OpenSSH path: own char *__progname + argv0-based ssh_get_progname.
-    export ac_cv_libc_defines___progname=no
     
     ./configure \
       --prefix=$out \
