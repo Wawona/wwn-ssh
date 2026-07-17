@@ -86,6 +86,8 @@ pkgs.stdenv.mkDerivation {
     echo "========================================"
     echo "Applying comprehensive iOS patches..."
     echo "========================================"
+
+    python3 ${./patches/patch-openssh-link-collisions.py}
     
     # Fix getrrsetbyname.c for iOS - DNS resolver types not available
     if [ -f openbsd-compat/getrrsetbyname.c ]; then
@@ -742,6 +744,11 @@ SSH_MAIN_EOF
     export CXXFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -fPIC -I${zlib}/include -I${openssl}/include"
     export LDFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -L${zlib}/lib -L${openssl}/lib"
     export PKG_CONFIG_PATH="${zlib}/lib/pkgconfig:${openssl}/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+    # Darwin libc exposes __progname as the private Mach-O ___progname. App Store
+    # Connect rejects IPAs that reference that symbol (altool code 11). Force the
+    # portable OpenSSH path: own char *__progname + argv0-based ssh_get_progname.
+    export ac_cv_libc_defines___progname=no
     
     ./configure \
       --prefix=$out \
@@ -773,6 +780,13 @@ SSH_MAIN_EOF
       --with-superuser-path="/usr/sbin:/usr/bin:/sbin:/bin" \
       --without-pkcs11 \
       --with-ssh-key-dir=$out/etc/ssh
+
+    # Belt-and-suspenders: strip HAVE___PROGNAME if configure still set it.
+    if [ -f config.h ] && grep -q 'HAVE___PROGNAME' config.h; then
+      echo "Stripping HAVE___PROGNAME from config.h (App Store ___progname)"
+      sed -i.bak '/HAVE___PROGNAME/d' config.h
+      rm -f config.h.bak
+    fi
     
     runHook postConfigure
   '';
@@ -1013,6 +1027,10 @@ SCP_MAIN_EOF
     # so drop the generic one to avoid a duplicate-symbol link failure.
     rm -f _ssh_objs/cleanup.o
 
+    # chachapoly_crypt/get_length also live in libssh2 (-lssh2); drop only those
+    # translation units and keep chachapoly_new/free for openssh client code.
+    rm -f _ssh_objs/cipher-chachapoly-libcrypto.o
+
     # SSH client objects (ssh command). ssh_renamed.o = ssh.o with main()
     # aliased to wwn_openssh_ssh_real_main (see STEP 2e).
     SSH_CLIENT_OBJS="ssh_renamed.o readconf.o clientloop.o sshtty.o sshconnect.o sshconnect2.o mux.o ssh_main.o"
@@ -1040,6 +1058,7 @@ SCP_MAIN_EOF
       ld -r -arch arm64 scp.o -o scp_renamed.o \
         -alias _main _wwn_openssh_scp_real_main \
         -unexported_symbol _main -unexported_symbol _cleanup_exit \
+        -alias _source _wwn_openssh_scp_source \
         && SCP_OBJS="scp_renamed.o scp_main.o" \
         || echo "Warning: scp main rename failed; excluding from archive"
       if [ -n "$SCP_OBJS" ]; then
