@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "tools": {
+    "ssh": {
+      "helpFlags": ["-h", "--help", "-V", "--version", "-p", "-l", "-i", "-v", "-t", "-T", "-o", "-4", "-6", "-q"]
+    },
+    "ssh-keygen": {
+      "helpFlags": ["-h", "--help", "-V", "--version", "-t", "-b", "-f", "-N", "-C", "-y", "-l", "-E", "-q"]
+    },
+    "scp": {
+      "helpFlags": ["-h", "--help", "-V", "--version", "-P", "-i", "-v"]
+    }
+  },
+  "rows": [
+    {
+      "id": "ssh-help",
+      "tool": "ssh",
+      "argv": ["ssh", "--help"],
+      "expectExit": 0,
+      "expectStdoutRegex": "usage: ssh",
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-version",
+      "tool": "ssh",
+      "argv": ["ssh", "-V"],
+      "expectExit": 0,
+      "expectStderrRegex": "(Wawona ssh|OpenSSH_)",
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-help",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "--help"],
+      "expectExit": 0,
+      "expectStdoutRegex": "usage: ssh-keygen",
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-ed25519",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-t", "ed25519", "-f", "$TMP/id_ed25519", "-N", "", "-q"],
+      "expectExit": 0,
+      "expectFiles": ["$TMP/id_ed25519", "$TMP/id_ed25519.pub"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-ecdsa",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-t", "ecdsa", "-b", "256", "-f", "$TMP/id_ecdsa", "-N", "", "-q"],
+      "expectExit": 0,
+      "expectFiles": ["$TMP/id_ecdsa", "$TMP/id_ecdsa.pub"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-rsa",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-t", "rsa", "-b", "2048", "-f", "$TMP/id_rsa", "-N", "", "-q"],
+      "expectExit": 0,
+      "expectFiles": ["$TMP/id_rsa", "$TMP/id_rsa.pub"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-ed25519-passphrase",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-t", "ed25519", "-f", "$TMP/id_ed25519_pass", "-N", "wawona-test-pass", "-q"],
+      "expectExit": 0,
+      "expectFiles": ["$TMP/id_ed25519_pass", "$TMP/id_ed25519_pass.pub"],
+      "note": "Apple libssh2 CLI: encrypted PKCS#8; OpenSSH: openssh-key-v1+bcrypt.",
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-y",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-y", "-f", "$TMP/id_ed25519"],
+      "expectExit": 0,
+      "expectStdoutRegex": "ssh-",
+      "dependsOn": ["ssh-keygen-ed25519"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-l",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-l", "-f", "$TMP/id_ed25519"],
+      "expectExit": 0,
+      "dependsOn": ["ssh-keygen-ed25519"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "scp-help",
+      "tool": "scp",
+      "argv": ["scp", "--help"],
+      "expectExit": 0,
+      "expectStdoutRegex": "usage: scp",
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "scp-version",
+      "tool": "scp",
+      "argv": ["scp", "-V"],
+      "expectExit": 0,
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-flags-accepted",
+      "tool": "ssh",
+      "argv": ["ssh", "-4", "-6", "-q", "-n", "-t", "-T", "-o", "BatchMode=yes", "-p", "22", "-l", "nobody", "-i", "$TMP/id_ed25519", "-v", "127.0.0.1", "true"],
+      "expectExit": null,
+      "note": "Exercises flag parser; connection may fail without sshd",
+      "dependsOn": ["ssh-keygen-ed25519"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-flags",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-t", "ed25519", "-b", "256", "-f", "$TMP/id_flags", "-N", "", "-C", "wawona-test", "-E", "sha256", "-q"],
+      "expectExit": 0,
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-h-short",
+      "tool": "ssh",
+      "argv": ["ssh", "-h"],
+      "expectExit": 0,
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "ssh-keygen-V",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-V"],
+      "expectExit": 0,
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "scp-P-i-v-helpish",
+      "tool": "scp",
+      "argv": ["scp", "-P", "22", "-i", "$TMP/id_ed25519", "-v", "--help"],
+      "expectExit": 0,
+      "dependsOn": ["ssh-keygen-ed25519"],
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+
+    {
+      "id": "waypipe-ssh-contract",
+      "tool": "waypipe",
+      "argv": ["waypipe", "ssh", "user@host"],
+      "note": "Contract cell: Apple uses libssh2 streamlocal; Android/macOS exec OpenSSH via --ssh-bin. Covered by streamlocal sentinel + integration.",
+      "targets": ["ios", "android", "macos"],
+      "needs": "contract",
+      "expectExit": null
+    },
+    {
+      "id": "gpg-exported-key-format",
+      "tool": "ssh-keygen",
+      "argv": ["ssh-keygen", "-y", "-f", "$TMP/id_ed25519"],
+      "expectExit": 0,
+      "expectStdoutRegex": "ssh-",
+      "dependsOn": ["ssh-keygen-ed25519"],
+      "note": "OpenSSH-format keys are compatible with gpg --export-ssh-key imports; Settings Import GPG SSH Key copies such files.",
+      "targets": ["ios", "ipados", "tvos", "watchos", "visionos", "android", "macos", "linux"],
+      "needs": "none"
+    },
+    {
+      "id": "macos-gpg-agent-ssh",
+      "tool": "ssh",
+      "argv": ["ssh", "-V"],
+      "note": "macOS: EnableSSHSupport in gpg-agent.conf; OpenSSH uses gpg-agent as ssh-agent when SSH_AUTH_SOCK points at it. Documented contract cell.",
+      "targets": ["macos"],
+      "needs": "gpg-agent",
+      "expectExit": null
+    }
+  ]
+}

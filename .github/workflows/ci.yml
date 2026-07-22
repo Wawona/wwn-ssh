@@ -15,25 +15,43 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
-      - uses: DeterminateSystems/nix-installer-action@main
+      # Pin installer action for reproducibility (not @main).
+      - uses: DeterminateSystems/nix-installer-action@v20
         with:
           determinate: true
       - uses: DeterminateSystems/flakehub-cache-action@v3
 
       - name: fragment evaluates
         run: nix eval .#registryFragment --apply builtins.attrNames
-      - name: backends lib evaluates
-        run: nix eval .#lib.backends --apply builtins.attrNames
+      - name: backends assert libssh2-cli / openssh
+        run: |
+          nix eval --json .#lib.backends.ios.sshBackend | grep -q libssh2-cli
+          nix eval --json .#lib.backends.android.sshBackend | grep -q openssh
+          nix eval --json .#lib.backends.macos.sshBackend | grep -q openssh
+      - name: Apple openssh registry is null
+        run: |
+          # ios openssh recipe must be absent / null in fragment intent
+          nix eval --json .#lib.backends.ios.sshBackend | grep -vq openssh-inprocess
       - name: recipes instantiate (no build)
         run: |
-          nix eval --raw .#packages.aarch64-darwin.openssh-ios.drvPath
           nix eval --raw .#packages.aarch64-darwin.libssh2-ios.drvPath
+          nix eval --raw .#packages.aarch64-darwin.ssh-cli-ios.drvPath
           nix eval --raw .#packages.aarch64-darwin.sshpass-ios.drvPath
           nix eval --raw .#packages.aarch64-darwin.openssh-android.drvPath
           nix eval --raw .#packages.aarch64-darwin.libssh2-android.drvPath
           nix eval --raw .#packages.aarch64-darwin.sshpass-android.drvPath
           nix eval --raw .#packages.aarch64-darwin.openssh-macos.drvPath
           nix eval --raw .#packages.aarch64-darwin.sshpass-macos.drvPath
+      - name: help-coverage + static checks
+        run: |
+          nix build .#checks.aarch64-darwin.help-coverage .#checks.aarch64-darwin.streamlocal-sentinel .#checks.aarch64-darwin.backends-no-stub -L
+      - name: forbid product openssh-ios
+        run: |
+          if nix eval .#packages.aarch64-darwin.openssh-ios.drvPath 2>/dev/null; then
+            echo "ERROR: openssh-ios must not be a product package"
+            exit 1
+          fi
+          echo "OK: no openssh-ios package"
 
   build-apple:
     name: build ssh stack (Apple)
@@ -41,7 +59,7 @@ jobs:
     needs: eval
     steps:
       - uses: actions/checkout@v5
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/nix-installer-action@v20
         with:
           determinate: true
           extra-conf: |
@@ -49,7 +67,23 @@ jobs:
             allow-import-from-derivation = true
       - uses: DeterminateSystems/flakehub-cache-action@v3
 
-      - run: nix build .#packages.aarch64-darwin.openssh-ios .#packages.aarch64-darwin.libssh2-ios .#packages.aarch64-darwin.openssh-macos -L
+      - run: nix build .#packages.aarch64-darwin.libssh2-ios .#packages.aarch64-darwin.ssh-cli-ios .#packages.aarch64-darwin.openssh-macos .#packages.aarch64-darwin.ssh-cli-host -L
+      - name: ssh-cli symbol sentinel
+        run: |
+          out=$(nix build .#packages.aarch64-darwin.ssh-cli-ios --no-link --print-out-paths)
+          nm -gU "$out/lib/libwwn-ssh-cli.a" | grep -E ' _ssh_main$| _ssh_keygen_main$| _scp_main$'
+      - name: headless matrix (OpenSSH macOS + libssh2 CLI host)
+        run: |
+          chmod +x tests/run-matrix.sh
+          OSS=$(nix build .#packages.aarch64-darwin.openssh-macos --no-link --print-out-paths)
+          HOST=$(nix build .#packages.aarch64-darwin.ssh-cli-host --no-link --print-out-paths)
+          bash tests/run-matrix.sh macos "$OSS/bin"
+          # Same CLI sources as Apple mobile archive — proves keygen/help/version.
+          bash tests/run-matrix.sh ios "$HOST/bin"
+          bash tests/run-matrix.sh ipados "$HOST/bin"
+          bash tests/run-matrix.sh tvos "$HOST/bin"
+          bash tests/run-matrix.sh watchos "$HOST/bin"
+          bash tests/run-matrix.sh visionos "$HOST/bin"
 
   build-android:
     name: build ssh stack (Android)
@@ -57,7 +91,7 @@ jobs:
     needs: eval
     steps:
       - uses: actions/checkout@v5
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/nix-installer-action@v20
         with:
           determinate: true
           extra-conf: |
@@ -66,3 +100,13 @@ jobs:
       - uses: DeterminateSystems/flakehub-cache-action@v3
 
       - run: nix build .#packages.aarch64-darwin.openssh-android .#packages.aarch64-darwin.libssh2-android .#packages.aarch64-darwin.sshpass-android -L
+      - name: android openssh bins + OpenSSH banner
+        run: |
+          out=$(nix build .#packages.aarch64-darwin.openssh-android --no-link --print-out-paths)
+          test -x "$out/bin/ssh"
+          test -x "$out/bin/ssh-keygen"
+          test -x "$out/bin/scp"
+          # Must be OpenSSH, not Dropbear (aarch64 Android — no host exec)
+          ! strings "$out/bin/ssh" | grep -qi dropbear || { echo "Dropbear strings found"; exit 1; }
+          strings "$out/bin/ssh" | grep -q 'OpenSSH_' || { echo "missing OpenSSH_ banner string"; exit 1; }
+          strings "$out/bin/ssh-keygen" | grep -q 'OpenSSH_' || { echo "missing OpenSSH_ in keygen"; exit 1; }

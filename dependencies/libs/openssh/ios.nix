@@ -1,3 +1,6 @@
+# ARCHAEOLOGY ONLY — do not link into App Store apps.
+# Product Apple-mobile SSH is libssh2 + ssh-cli (see registryFragment).
+# Kept for reference; never expose as .#openssh-ios.
 {
   lib,
   pkgs,
@@ -6,71 +9,63 @@
   buildModule,
   simulator ? false,
   iosToolchain,
+  # Injected by wwn-toolchain: apple-mobile-platform.nix for tv/watch/vision.
+  toolchainSrc ? null,
 }:
 
 let
   # Relocated recipe (wwn-ssh): the Apple toolchain is injected by
   # wwn-toolchain's mkToolchains; it carries findXcodeScript.
   xcodeUtils = iosToolchain;
-  dt = iosToolchain.deploymentTarget;
-  clangTarget = if simulator then "arm64-apple-ios${dt}-simulator" else "arm64-apple-ios${dt}";
-  verMin = if simulator then "-mios-simulator-version-min=${dt}" else "-miphoneos-version-min=${dt}";
-  sdkPlatform = if simulator then "iPhoneSimulator" else "iPhoneOS";
+  mobile =
+    if toolchainSrc != null then
+      (import "${toolchainSrc}/dependencies/toolchains/apple-mobile-platform.nix") {
+        inherit iosToolchain simulator;
+      }
+    else
+      null;
+  isVisionOS = if mobile != null then mobile.isVisionOS else false;
+  isTVOS = if mobile != null then mobile.isTVOS else false;
+  isWatchOS = if mobile != null then mobile.isWatchOS else false;
+  dt =
+    if mobile != null then mobile.minVersion
+    else (iosToolchain.deploymentTarget or "17.0");
+  sdkPlatform =
+    if mobile != null then mobile.sdkPlatform
+    else if simulator then "iPhoneSimulator"
+    else "iPhoneOS";
+  xcrunSdk =
+    if mobile != null then mobile.xcrunSdk
+    else if simulator then "iphonesimulator"
+    else "iphoneos";
+  # Triple for -target / configure host. Must match zlib/openssl platform
+  # (buildForTVOS aliases buildForIOS → tvOS zlib; iPhone flags then fail link).
+  clangTarget =
+    if isVisionOS then
+      (if simulator then "arm64-apple-xros${dt}-simulator" else "arm64-apple-xros${dt}")
+    else if isWatchOS then
+      (if simulator then "arm64-apple-watchos${dt}-simulator" else "arm64-apple-watchos${dt}")
+    else if isTVOS then
+      (if simulator then "arm64-apple-tvos${dt}-simulator" else "arm64-apple-tvos${dt}")
+    else if simulator then
+      "arm64-apple-ios${dt}-simulator"
+    else
+      "arm64-apple-ios${dt}";
+  # visionOS encodes min version in -target; others use deployment flags.
+  verMin =
+    if isVisionOS then ""
+    else if mobile != null then mobile.minVerFlag
+    else if simulator then "-mios-simulator-version-min=${dt}"
+    else "-miphoneos-version-min=${dt}";
   # OpenSSH source - fetch latest stable release
   src = pkgs.fetchurl {
     url = "https://cloudflare.cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-9.8p1.tar.gz";
     sha256 = "sha256-3YvQAqN5tdSZ37BQ3R+pr4Ap6ARh9LtsUjxJlz9aOfM=";
   };
-  
-  # Dependencies for OpenSSH
+
+  # Nested deps via buildForIOS (aliased to tv/watch/vision under those toolchains).
   zlib = buildModule.buildForIOS "zlib" { inherit simulator; };
-  # OpenSSL - we need to build it for iOS
-  openssl = let
-    opensslSrc = pkgs.fetchurl {
-      url = "https://www.openssl.org/source/openssl-3.3.1.tar.gz";
-      sha256 = "sha256-d3zVlihMiDN1oqehG/XSeG/FQTJV76sgxQ1v/m0CC34=";
-    };
-  in
-  pkgs.stdenv.mkDerivation {
-    name = "openssl-ios";
-    src = opensslSrc;
-    nativeBuildInputs = with buildPackages; [ perl ];
-    preConfigure = ''
-      if [ -z "''${XCODE_APP:-}" ]; then
-        XCODE_APP=$(${xcodeUtils.findXcodeScript}/bin/find-xcode || true)
-        if [ -n "$XCODE_APP" ]; then
-          export XCODE_APP
-          export DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
-          export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
-          export SDKROOT="$DEVELOPER_DIR/Platforms/${sdkPlatform}.platform/Developer/SDKs/${sdkPlatform}.sdk"
-        fi
-      fi
-      if [ -n "''${SDKROOT:-}" ] && [ -d "$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin" ]; then
-        IOS_CC="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
-      else
-        IOS_CC="${buildPackages.clang}/bin/clang"
-      fi
-    '';
-    configurePhase = ''
-      runHook preConfigure
-      export CC="$IOS_CC"
-      export CFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin} -fPIC"
-      export LDFLAGS="-arch arm64 -target ${clangTarget} -isysroot $SDKROOT ${verMin}"
-      ./Configure ios64-cross no-shared no-dso --prefix=$out --openssldir=$out/etc/ssl
-      runHook postConfigure
-    '';
-    buildPhase = ''
-      runHook preBuild
-      make -j$NIX_BUILD_CORES
-      runHook postBuild
-    '';
-    installPhase = ''
-      runHook preInstall
-      make install_sw install_ssldirs
-      runHook postInstall
-    '';
-    __noChroot = true;
-  };
+  openssl = buildModule.buildForIOS "openssl" { inherit simulator; };
 in
 pkgs.stdenv.mkDerivation {
   name = "openssh-ios";
@@ -300,8 +295,10 @@ READPASS_EOF
       }' readpass.c
       rm -f readpass.c.bak
       echo "✓ Patched readpass.c for iOS password handling"
+      # tvOS/watchOS: fork/execlp are unavailable — stub askpass subprocess path.
+      python3 ${./patches/patch-readpass-no-fork.py}
     fi
-    
+
     # ========================================
     # Patch sshconnect.c to handle iOS-specific connection issues
     # ========================================
@@ -701,19 +698,26 @@ SSH_MAIN_EOF
   ];
   
   preConfigure = ''
-    if [ -z "''${XCODE_APP:-}" ]; then
+    unset DEVELOPER_DIR
+    IOS_SDK=$(xcrun --sdk ${xcrunSdk} --show-sdk-path 2>/dev/null || true)
+    if [ ! -d "$IOS_SDK" ]; then
       XCODE_APP=$(${xcodeUtils.findXcodeScript}/bin/find-xcode || true)
       if [ -n "$XCODE_APP" ]; then
         export XCODE_APP
         export DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
         export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
-        export SDKROOT="$DEVELOPER_DIR/Platforms/${sdkPlatform}.platform/Developer/SDKs/${sdkPlatform}.sdk"
+        IOS_SDK="$DEVELOPER_DIR/Platforms/${sdkPlatform}.platform/Developer/SDKs/${sdkPlatform}.sdk"
       fi
+    else
+      export DEVELOPER_DIR=$(echo "$IOS_SDK" | sed -E 's|^(.*\.app/Contents/Developer)/.*$|\1|')
+      export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
     fi
-    
+    export SDKROOT="$IOS_SDK"
+
     export NIX_CFLAGS_COMPILE=""
     export NIX_CXXFLAGS_COMPILE=""
-    
+    export NIX_LDFLAGS=""
+
     if [ -n "''${SDKROOT:-}" ] && [ -d "$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin" ]; then
       IOS_CC="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
       IOS_CXX="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
@@ -721,7 +725,7 @@ SSH_MAIN_EOF
       IOS_CC="${buildPackages.clang}/bin/clang"
       IOS_CXX="${buildPackages.clang}/bin/clang++"
     fi
-    
+
     if [ ! -f configure ]; then
       autoreconf -fi || true
     fi

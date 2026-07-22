@@ -19,12 +19,13 @@ let
   isWatchOS = mobile.isWatchOS;
   isTVOS = mobile.isTVOS;
   mobileMinVersion = mobile.minVersion;
-  # libssh2 source
+  versions = import ../ssh-versions.nix;
+  # libssh2 source (pinned in ssh-versions.nix)
   src = pkgs.fetchFromGitHub {
     owner = "libssh2";
     repo = "libssh2";
-    rev = "libssh2-1.11.1";
-    sha256 = "sha256-yz97oqqN+NJTDL/HPJe3niFynbR8QXHuuiKr+uuKJtw=";
+    rev = versions.libssh2.rev;
+    sha256 = versions.libssh2.sha256;
   };
   # Use OpenSSL instead of mbedTLS: mbedTLS bundled entropy source lacks iOS
   # support (NULL callback → crash in mbedtls_ctr_drbg_reseed_internal during

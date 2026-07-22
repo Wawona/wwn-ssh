@@ -1,5 +1,5 @@
 {
-  description = "wwn-ssh: Wawona's App-Store-compliant SSH stack. Chooses the right backend per platform: in-process OpenSSH + libssh2 on Apple mobile (iOS/iPadOS/tvOS/watchOS/visionOS, no fork/exec), Dropbear (dbclient as ssh + dropbearkey) on Android, and regular OpenSSH on macOS/Linux. Plus sshpass for non-interactive password auth.";
+  description = "wwn-ssh: App-Store-compliant SSH stack. Apple mobile = libssh2 CLI + waypipe transport (never OpenSSH); Android/macOS/Linux = OpenSSH; sshpass where ssh is spawned.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -65,32 +65,27 @@
           inherit androidConfig;
         };
 
+      versions = import ./dependencies/libs/ssh-versions.nix;
       opensshDir = ./dependencies/libs/openssh;
       libssh2Dir = ./dependencies/libs/libssh2;
       sshpassDir = ./dependencies/libs/sshpass;
+      sshCliDir = ./dependencies/libs/ssh-cli;
     in
     {
       registryFragment = {
-        # Registry key stays "openssh" (the terminal `ssh` / `ssh-keygen`
-        # command surface), but wwn-ssh picks the compliant backend:
-        #   Apple mobile -> OpenSSH 9.8p1 built as libssh-inprocess.a
-        #                   (ssh_main/ssh_keygen_main/scp_main, no fork/exec)
-        #   Android      -> Dropbear (dbclient installed as ssh, dropbearkey
-        #                   as ssh-keygen; fork/exec of jniLibs is allowed)
-        #   macOS/Linux  -> regular OpenSSH from nixpkgs
+        # Terminal SSH binary surface (Android/macOS/Linux). Apple mobile = null.
         openssh = withPlatformVariants {
           android = opensshDir + "/android.nix";
           wearos = opensshDir + "/wearos.nix";
-          ios = opensshDir + "/ios.nix";
-          ipados = opensshDir + "/ios.nix";
-          tvos = opensshDir + "/tvos.nix";
-          visionos = opensshDir + "/visionos.nix";
-          watchos = opensshDir + "/watchos.nix";
+          ios = null;
+          ipados = null;
+          tvos = null;
+          visionos = null;
+          watchos = null;
           macos = opensshDir + "/macos.nix";
           linux = opensshDir + "/linux.nix";
         };
-        # libssh2 (+ streamlocal-forward@openssh.com patch): the in-process
-        # transport waypipe uses for `waypipe ssh` on Apple mobile.
+        # libssh2 + streamlocal for waypipe on Apple mobile (+ Android build).
         libssh2 = withPlatformVariants {
           android = libssh2Dir + "/android.nix";
           wearos = libssh2Dir + "/wearos.nix";
@@ -100,6 +95,17 @@
           visionos = libssh2Dir + "/visionos.nix";
           watchos = libssh2Dir + "/watchos.nix";
           macos = null;
+        };
+        # In-process OpenSSH-shaped CLI for Apple mobile (ssh_main / keygen / scp).
+        "ssh-cli" = withPlatformVariants {
+          ios = sshCliDir + "/ios.nix";
+          ipados = sshCliDir + "/ipados.nix";
+          tvos = sshCliDir + "/tvos.nix";
+          visionos = sshCliDir + "/visionos.nix";
+          watchos = sshCliDir + "/watchos.nix";
+          android = null;
+          macos = null;
+          linux = null;
         };
         sshpass = withPlatformVariants {
           android = sshpassDir + "/android.nix";
@@ -115,19 +121,15 @@
       };
 
       lib = {
-        # wwn-ssh owns the backend decision. Consumers (Wawona Settings,
-        # machine configuration, waypipe wiring) can consult this instead of
-        # hard-coding platform conditionals.
-        #   sshBackend:     what implements the `ssh` command line
-        #   waypipeSshTransport: how `waypipe ssh` tunnels
+        inherit versions;
         backends = {
-          ios = { sshBackend = "openssh-inprocess"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
-          ipados = { sshBackend = "openssh-inprocess"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
-          tvos = { sshBackend = "openssh-inprocess"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
-          watchos = { sshBackend = "openssh-inprocess"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
-          visionos = { sshBackend = "openssh-inprocess"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
-          android = { sshBackend = "dropbear"; waypipeSshTransport = "exec-ssh"; forkExec = true; };
-          wearos = { sshBackend = "dropbear"; waypipeSshTransport = "exec-ssh"; forkExec = true; };
+          ios = { sshBackend = "libssh2-cli"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
+          ipados = { sshBackend = "libssh2-cli"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
+          tvos = { sshBackend = "libssh2-cli"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
+          watchos = { sshBackend = "libssh2-cli"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
+          visionos = { sshBackend = "libssh2-cli"; waypipeSshTransport = "libssh2-inprocess"; forkExec = false; };
+          android = { sshBackend = "openssh"; waypipeSshTransport = "exec-ssh"; forkExec = true; };
+          wearos = { sshBackend = "openssh"; waypipeSshTransport = "exec-ssh"; forkExec = true; };
           macos = { sshBackend = "openssh"; waypipeSshTransport = "exec-ssh"; forkExec = true; };
           linux = { sshBackend = "openssh"; waypipeSshTransport = "exec-ssh"; forkExec = true; };
         };
@@ -152,9 +154,13 @@
           openssh-android = tc.buildForAndroid "openssh" { };
           libssh2-android = tc.buildForAndroid "libssh2" { };
           sshpass-android = tc.buildForAndroid "sshpass" { };
+          # Host-runnable libssh2 CLI (same sources as Apple archive) for H1 matrix.
+          ssh-cli-host = import ./dependencies/libs/ssh-cli/host-harness.nix {
+            inherit pkgs;
+          };
         } // (if isDarwin then {
-          openssh-ios = tc.buildForIOS "openssh" { };
           libssh2-ios = tc.buildForIOS "libssh2" { };
+          ssh-cli-ios = tc.buildForIOS "ssh-cli" { };
           sshpass-ios = tc.buildForIOS "sshpass" { };
           openssh-macos = tc.buildForMacOS "openssh" { };
           sshpass-macos = tc.buildForMacOS "sshpass" { };
@@ -162,6 +168,36 @@
           openssh-linux = tc.buildForLinux "openssh" { };
           sshpass-linux = tc.buildForLinux "sshpass" { };
         }));
+
+      checks = forAll (system:
+        let
+          pkgs = pkgsFor system;
+          versions' = versions;
+        in {
+          versions-pinned = pkgs.runCommand "wwn-ssh-versions-pinned" { } ''
+            echo "libssh2=${versions'.libssh2.version}" > $out
+            echo "opensshPortable=${versions'.opensshPortable.version}" >> $out
+            echo "sshpass=${versions'.sshpass.version}" >> $out
+          '';
+          backends-no-stub = pkgs.runCommand "wwn-ssh-backends-no-stub" { } ''
+            ${pkgs.jq}/bin/jq -e '
+              .ios.sshBackend == "libssh2-cli" and
+              .android.sshBackend == "openssh" and
+              .macos.sshBackend == "openssh"
+            ' ${pkgs.writeText "backends.json" (builtins.toJSON self.lib.backends)}
+            touch $out
+          '';
+          help-coverage = pkgs.runCommand "wwn-ssh-help-coverage" {
+            nativeBuildInputs = [ pkgs.python3 ];
+          } ''
+            python3 ${./tests/check-help-coverage.py} ${./tests/cli-matrix.json}
+            touch $out
+          '';
+          streamlocal-sentinel = pkgs.runCommand "wwn-ssh-streamlocal-sentinel" { } ''
+            grep -q libssh2_channel_forward_listen_streamlocal ${./dependencies/libs/libssh2/patch-streamlocal.sh}
+            touch $out
+          '';
+        });
 
       formatter = forAll (system: (pkgsFor system).nixfmt-rfc-style);
     };
