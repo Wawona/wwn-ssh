@@ -198,6 +198,12 @@ EOF
   dontFixup = true;
   meta = {
     description = "OpenSSH portable client for Android (wwn-ssh)";
-    platforms = [ "aarch64-linux" ];
+    # Host platforms that cross-build this Android package (not the Android ABI).
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+      "x86_64-darwin"
+      "aarch64-darwin"
+    ];
   };
 }
