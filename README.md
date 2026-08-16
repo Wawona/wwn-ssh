@@ -1,5 +1,7 @@
 # wwn-ssh
 
+[![CI](https://github.com/Wawona/wwn-ssh/actions/workflows/ci.yml/badge.svg)](https://github.com/Wawona/wwn-ssh/actions/workflows/ci.yml)
+
 Wawona's App-Store-compliant SSH stack. Chooses the right backend per platform;
 consumers merge `wwn-ssh.registryFragment` into the toolchain registry.
 
