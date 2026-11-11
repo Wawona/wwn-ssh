@@ -19,7 +19,7 @@ jobs:
         run: grep -E 'actions/workflows/.+/badge\.svg' README.md
   eval:
     name: flake eval (instantiation)
-    runs-on: macos-15
+    runs-on: macos-27
     steps:
       - uses: actions/checkout@v5
       # Pin installer action for reproducibility (not @main).
@@ -62,7 +62,7 @@ jobs:
 
   build-apple:
     name: build ssh stack (Apple)
-    runs-on: macos-15
+    runs-on: macos-27
     needs: eval
     steps:
       - uses: actions/checkout@v5
@@ -94,7 +94,7 @@ jobs:
 
   build-android:
     name: build ssh stack (Android)
-    runs-on: macos-15
+    runs-on: macos-27
     needs: eval
     steps:
       - uses: actions/checkout@v5
